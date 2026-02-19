@@ -25,17 +25,14 @@ from pathlib import Path
 from aiohttp import web
 
 # ==================== ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
-# Загружаем переменные из .env файла
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Получаем значения из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BETA_TESTER_ID = int(os.getenv('BETA_TESTER_ID', '0'))
 BROADCAST_MODE = os.getenv('BROADCAST_MODE', 'beta')
 SPECIFIC_USER_ID = int(os.getenv('SPECIFIC_USER_ID', '123456789'))
 
-# Проверяем, что токен загружен
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения! Проверь файл .env")
 
@@ -54,33 +51,18 @@ SCHEDULE_URL = f"{BASE_URL}/schedule-frame/group"
 
 # ==================== КАСТОМНЫЕ ЭМОДЗИ ====================
 CUSTOM_EMOJI = {
-    # Поиск и загрузка
     'search': {'id': '5190595516269865314', 'fallback': '🔍'},
-    
-    # Статусы
     'error': {'id': '5019523782004441717', 'fallback': '❌'},
     'success': {'id': '5021905410089550576', 'fallback': '✅'},
-    
-    # Приветствие и бета
     'welcome': {'id': '5195448447062251797', 'fallback': '👋'},
     'beta': {'id': '5206621104403129406', 'fallback': '🔬'},
-    
-    # Факультет и группа
     'faculty': {'id': '5204128352629169390', 'fallback': '🎓'},
     'group': {'id': '5253675142600490236', 'fallback': '👥'},
-    
-    # Календарь
     'calendar': {'id': '5274055917766202507', 'fallback': '📅'},
-    
-    # Напоминание
     'reminder': {'id': '5382146496416196771', 'fallback': '⏰'},
-    
-    # Статистика и тесты
     'stats': {'id': '5303026378415820622', 'fallback': '📊'},
     'test': {'id': '5240374792820890829', 'fallback': '🧪'},
     'broadcast': {'id': '5424818078833715060', 'fallback': '📢'},
-    
-    # Команды и навигация
     'commands': {'id': '6285014721582076161', 'fallback': '📚'},
     'dot': {'id': '5350751092936303896', 'fallback': '•'},
     'info': {'id': '6285014721582076161', 'fallback': 'ℹ️'},
@@ -102,9 +84,10 @@ MAX_REQUESTS_PER_MINUTE = 30
 
 # ==================== НАСТРОЙКИ БЕТА-ТЕСТА ====================
 BETA_MODE = True
-BETA_TESTER_ID = 5087050669
-BROADCAST_MODE = "beta"
-SPECIFIC_USER_ID = 123456789
+# Эти значения будут перезаписаны из .env
+BETA_TESTER_ID = BETA_TESTER_ID
+BROADCAST_MODE = BROADCAST_MODE
+SPECIFIC_USER_ID = SPECIFIC_USER_ID
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -114,6 +97,7 @@ logger = logging.getLogger(__name__)
 http_session: Optional[aiohttp.ClientSession] = None
 request_timestamps: List[datetime] = []
 all_groups_cache: Dict[str, Dict[str, str]] = {}
+groups_loaded = False
 
 # ==================== ИНИЦИАЛИЗАЦИЯ ====================
 bot = Bot(token=BOT_TOKEN)
@@ -296,7 +280,7 @@ async def fetch_html(url: str, retry: int = 3) -> Optional[str]:
 
 async def load_all_groups():
     """Загружает все группы со всех факультетов"""
-    global all_groups_cache
+    global all_groups_cache, groups_loaded
     all_groups_cache = {}
     
     html = await fetch_html(SCHEDULE_URL)
@@ -346,6 +330,7 @@ async def load_all_groups():
             logger.error(f"Ошибка загрузки групп для {faculty_name}: {e}")
             continue
     
+    groups_loaded = True
     logger.info(f"✅ Загружено групп: {len(all_groups_cache)}")
 
 async def parse_daily_schedule(faculty_id: str, group_id: str, target_date: date, use_cache: bool = True) -> List[Dict]:
@@ -830,7 +815,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     settings = await get_user_settings(message.from_user.id)
     
     if settings:
-        # Зарегистрированный пользователь
         text = (
             f"{emoji('info')} Ты уже зарегистрирован!\n\n"
             f"{emoji('faculty')} {settings['faculty_name']}, гр. {settings['group_name']}\n\n"
@@ -838,7 +822,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
             f"/help - помощь"
         )
     else:
-        # Новый пользователь
         text = (
             f"{emoji('welcome')} Привет! Я бот для расписания РГРТУ.\n\n"
             f"Напиши /group чтобы выбрать свою группу!\n\n"
@@ -855,7 +838,6 @@ async def cmd_help(message: types.Message, state: FSMContext):
     settings = await get_user_settings(message.from_user.id)
     
     if settings:
-        # Зарегистрированный пользователь
         text = (
             f"{emoji('commands')} <b>Все доступные команды:</b>\n\n"
             f"<code>/group</code> — сменить группу\n"
@@ -866,7 +848,6 @@ async def cmd_help(message: types.Message, state: FSMContext):
             f"<code>/help</code> — это сообщение"
         )
     else:
-        # Новый пользователь
         text = (
             f"{emoji('commands')} <b>Все доступные команды:</b>\n\n"
             f"<code>/group</code> — выбрать группу\n"
@@ -1036,7 +1017,6 @@ async def beta_broadcast_text(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Сохраняем текст с HTML-разметкой
     await state.update_data(broadcast_text=message.html_text)
     
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -1064,7 +1044,6 @@ async def beta_broadcast_media(message: types.Message, state: FSMContext):
     data = await state.get_data()
     broadcast_text = data.get('broadcast_text')
     
-    # Получаем file_id медиа
     if message.photo:
         media_file_id = message.photo[-1].file_id
         media_type = "photo"
@@ -1134,18 +1113,17 @@ async def broadcast_send(callback: types.CallbackQuery, state: FSMContext):
     
     await callback.answer()
     
-    target = callback.data.replace("broadcast_send_", "")  # "all" или "beta"
+    target = callback.data.replace("broadcast_send_", "")
     
     data = await state.get_data()
     broadcast_text = data.get('broadcast_text')
     media_file_id = data.get('media_file_id')
     media_type = data.get('media_type')
     
-    # Получаем список пользователей
     if target == "beta":
-        users = await get_all_users()  # Только бета-тестеры
+        users = await get_all_users()
     else:
-        users = await get_all_users()  # Все (уже отфильтровано в функции)
+        users = await get_all_users()
     
     await callback.message.edit_text(
         f"{emoji('broadcast')} Начинаю рассылку {len(users)} пользователям...\n\n"
@@ -1271,10 +1249,7 @@ async def beta_users(callback: types.CallbackQuery):
     for u in users:
         beta_mark = "🔬" if u['is_beta_tester'] else "👤"
         active_mark = "✅" if u['is_active'] else "❌"
-        
-        # Делаем ID кликабельным
         user_link = f"<a href='tg://user?id={u['user_id']}'>{u['user_id']}</a>"
-        
         text_lines.append(f"{beta_mark} {user_link} {active_mark}")
         text_lines.append(f"   {u['faculty_name']} — {u['group_name']}\n")
     
@@ -1301,7 +1276,6 @@ async def beta_all_messages(callback: types.CallbackQuery):
 async def process_group_input(message: types.Message, state: FSMContext):
     """Обработка введенного номера группы"""
     
-    # Проверяем, не команда ли это
     if message.text.startswith('/'):
         command = message.text.lower()
         await state.clear()
@@ -1338,7 +1312,6 @@ async def process_group_input(message: types.Message, state: FSMContext):
             )
         return
     
-    # Обрабатываем ввод группы
     group_input = message.text.strip().upper()
     
     if not all_groups_cache:
@@ -1347,11 +1320,8 @@ async def process_group_input(message: types.Message, state: FSMContext):
     
     if group_input in all_groups_cache:
         group_info = all_groups_cache[group_input]
-        
-        # Получаем старые настройки пользователя
         old_settings = await get_user_settings(message.from_user.id)
         
-        # Сохраняем новые настройки
         await save_user_settings(
             message.from_user.id,
             group_info['faculty_id'],
@@ -1360,23 +1330,19 @@ async def process_group_input(message: types.Message, state: FSMContext):
             group_input
         )
         
-        # Проверяем, была ли у пользователя группа раньше
         if old_settings:
-            # Смена группы
             text = (
                 f"{emoji('success')} <b>Группа успешно изменена!</b>\n\n"
                 f"{emoji('faculty')} {group_info['faculty_name']}, гр. {group_input}\n\n"
                 f"Теперь ты будешь получать расписание для новой группы."
             )
             
-            # Отменяем старые напоминания
             today = datetime.now().date()
             task_key = f"{message.from_user.id}_{today}"
             if task_key in reminder_tasks:
                 reminder_tasks[task_key].cancel()
                 del reminder_tasks[task_key]
             
-            # Планируем новые напоминания
             now = datetime.now(LOCAL_TIMEZONE)
             if now.hour < 23:
                 await schedule_reminders_for_user(
@@ -1387,7 +1353,6 @@ async def process_group_input(message: types.Message, state: FSMContext):
                 )
             
         else:
-            # Новая регистрация
             text = (
                 f"{emoji('success')} <b>Регистрация завершена!</b>\n\n"
                 f"{emoji('faculty')} {group_info['faculty_name']}, гр. {group_input}\n\n"
@@ -1427,31 +1392,17 @@ async def process_group_input(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
 
-# ==================== ЗАПУСК ====================
-async def on_startup():
-    global http_session
-    http_session = aiohttp.ClientSession()
-    await init_db()
-    await load_all_groups()
-    logger.info("✅ HTTP сессия создана")
-    logger.info("✅ Все группы загружены в кеш")
-
-async def on_shutdown():
-    global http_session
-    if http_session:
-        await http_session.close()
-    logger.info("👋 HTTP сессия закрыта")
-
 # ==================== HEALTH CHECK ДЛЯ ХОСТИНГА ====================
 async def handle_health(request):
     """Health check для хостинга"""
-    return web.Response(text="OK", status=200)
+    status = f"OK (groups loaded: {groups_loaded})"
+    return web.Response(text=status, status=200)
 
 async def run_health_server():
     """Запускает минимальный сервер для health check"""
     app = web.Application()
     app.router.add_get("/", handle_health)
-    app.router.add_get("/kaithheathcheck", handle_health)  # специальный эндпоинт Leapcell
+    app.router.add_get("/kaithheathcheck", handle_health)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1459,7 +1410,30 @@ async def run_health_server():
     await site.start()
     logger.info(f"✅ Health check сервер запущен на порту 8080")
 
+async def load_groups_background():
+    """Загрузка групп в фоне"""
+    global all_groups_cache, groups_loaded
+    try:
+        await load_all_groups()
+        groups_loaded = True
+        logger.info(f"✅ Все группы загружены в кеш ({len(all_groups_cache)} групп)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки групп: {e}")
+
 # ==================== ЗАПУСК ====================
+async def on_startup():
+    global http_session
+    http_session = aiohttp.ClientSession()
+    await init_db()
+    asyncio.create_task(load_groups_background())
+    logger.info("✅ HTTP сессия создана")
+
+async def on_shutdown():
+    global http_session
+    if http_session:
+        await http_session.close()
+    logger.info("👋 HTTP сессия закрыта")
+
 async def main():
     print("\n" + "="*50)
     print("🚀 ЗАПУСК БОТА (ФИНАЛЬНАЯ ВЕРСИЯ С РАССЫЛКАМИ)")
@@ -1469,13 +1443,9 @@ async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     
-    # Запускаем health check сервер в фоне
     asyncio.create_task(run_health_server())
-    
-    # Запускаем рассылку
     asyncio.create_task(daily_schedule_sender())
     
-    # Запускаем бота (polling)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
@@ -1483,4 +1453,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Бот остановлен")
-
