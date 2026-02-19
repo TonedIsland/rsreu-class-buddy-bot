@@ -22,6 +22,7 @@ from urllib.parse import urlencode
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from aiohttp import web
 
 # ==================== ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
 # Загружаем переменные из .env файла
@@ -1442,8 +1443,6 @@ async def on_shutdown():
     logger.info("👋 HTTP сессия закрыта")
 
 # ==================== HEALTH CHECK ДЛЯ ХОСТИНГА ====================
-from aiohttp import web
-
 async def handle_health(request):
     """Health check для хостинга"""
     return web.Response(text="OK", status=200)
@@ -1484,3 +1483,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n👋 Бот остановлен")
+
