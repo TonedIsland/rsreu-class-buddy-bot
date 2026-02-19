@@ -1441,6 +1441,26 @@ async def on_shutdown():
         await http_session.close()
     logger.info("👋 HTTP сессия закрыта")
 
+# ==================== HEALTH CHECK ДЛЯ ХОСТИНГА ====================
+from aiohttp import web
+
+async def handle_health(request):
+    """Health check для хостинга"""
+    return web.Response(text="OK", status=200)
+
+async def run_health_server():
+    """Запускает минимальный сервер для health check"""
+    app = web.Application()
+    app.router.add_get("/", handle_health)
+    app.router.add_get("/kaithheathcheck", handle_health)  # специальный эндпоинт Leapcell
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=8080)
+    await site.start()
+    logger.info(f"✅ Health check сервер запущен на порту 8080")
+
+# ==================== ЗАПУСК ====================
 async def main():
     print("\n" + "="*50)
     print("🚀 ЗАПУСК БОТА (ФИНАЛЬНАЯ ВЕРСИЯ С РАССЫЛКАМИ)")
@@ -1450,8 +1470,13 @@ async def main():
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     
+    # Запускаем health check сервер в фоне
+    asyncio.create_task(run_health_server())
+    
+    # Запускаем рассылку
     asyncio.create_task(daily_schedule_sender())
     
+    # Запускаем бота (polling)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
