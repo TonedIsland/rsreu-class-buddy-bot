@@ -1,6 +1,6 @@
 """
 Telegram Bot для расписания РГРТУ
-ФИНАЛЬНАЯ ВЕРСИЯ С РАССЫЛКАМИ, КЛИКАБЕЛЬНЫМИ ID И ПРОВЕРКОЙ ВСЕХ СООБЩЕНИЙ
+ФИНАЛЬНАЯ ВЕРСИЯ С АСИНХРОННОЙ ЗАГРУЗКОЙ ГРУПП
 """
 
 import asyncio
@@ -97,7 +97,7 @@ logger = logging.getLogger(__name__)
 http_session: Optional[aiohttp.ClientSession] = None
 request_timestamps: List[datetime] = []
 all_groups_cache: Dict[str, Dict[str, str]] = {}
-groups_loaded = False
+groups_loaded = False  # Флаг для проверки загрузки групп
 
 # ==================== ИНИЦИАЛИЗАЦИЯ ====================
 bot = Bot(token=BOT_TOKEN)
@@ -278,60 +278,76 @@ async def fetch_html(url: str, retry: int = 3) -> Optional[str]:
     logger.error(f"❌ Все {retry} попыток провалились для {url}")
     return None
 
-async def load_all_groups():
-    """Загружает все группы со всех факультетов"""
+# ==================== ЗАГРУЗКА ГРУПП В ФОНЕ ====================
+async def load_groups_for_faculty(faculty_id: str, faculty_name: str):
+    """Загружает группы для одного факультета"""
+    global all_groups_cache
+    url = f"{SCHEDULE_URL}?faculty={faculty_id}&group=&date="
+    try:
+        html = await fetch_html(url)
+        if not html:
+            return
+        
+        soup = BeautifulSoup(html, 'html.parser')
+        select_div = soup.find('div', {'data-component': 'SelectAutocomplete'})
+        if select_div:
+            options_json = select_div.get(':options')
+            if options_json:
+                all_options = json.loads(options_json)
+                for item in all_options:
+                    if isinstance(item, dict):
+                        group_name = item.get('label')
+                        group_id = item.get('value')
+                        if group_name and group_id and group_id != 0 and 'Не выбрана' not in group_name:
+                            all_groups_cache[group_name] = {
+                                'faculty_id': faculty_id,
+                                'group_id': str(group_id),
+                                'faculty_name': faculty_name
+                            }
+        logger.info(f"✅ Загружено групп для {faculty_name}: {len([g for g in all_groups_cache.values() if g['faculty_name'] == faculty_name])}")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки групп для {faculty_name}: {e}")
+
+async def load_all_groups_background():
+    """Загружает все группы в фоне (запускается после старта бота)"""
     global all_groups_cache, groups_loaded
     all_groups_cache = {}
     
-    html = await fetch_html(SCHEDULE_URL)
-    if not html:
-        logger.error("❌ Не удалось загрузить главную страницу")
-        return
-    
-    soup = BeautifulSoup(html, 'html.parser')
-    faculty_select = soup.find('select', {'name': 'faculty'})
-    if not faculty_select:
-        logger.error("❌ Не найден выбор факультета")
-        return
-    
-    faculties = {}
-    for option in faculty_select.find_all('option'):
-        faculty_id = option.get('value')
-        faculty_name = option.text.strip()
-        if faculty_id and faculty_id != '0':
-            faculties[faculty_id] = faculty_name
-    
-    logger.info(f"📚 Загружено факультетов: {len(faculties)}")
-    
-    for faculty_id, faculty_name in faculties.items():
-        url = f"{SCHEDULE_URL}?faculty={faculty_id}&group=&date="
-        try:
-            html = await fetch_html(url)
-            if not html:
-                continue
-                
-            soup = BeautifulSoup(html, 'html.parser')
-            select_div = soup.find('div', {'data-component': 'SelectAutocomplete'})
-            if select_div:
-                options_json = select_div.get(':options')
-                if options_json:
-                    all_options = json.loads(options_json)
-                    for item in all_options:
-                        if isinstance(item, dict):
-                            group_name = item.get('label')
-                            group_id = item.get('value')
-                            if group_name and group_id and group_id != 0 and 'Не выбрана' not in group_name:
-                                all_groups_cache[group_name] = {
-                                    'faculty_id': faculty_id,
-                                    'group_id': str(group_id),
-                                    'faculty_name': faculty_name
-                                }
-        except Exception as e:
-            logger.error(f"Ошибка загрузки групп для {faculty_name}: {e}")
-            continue
-    
-    groups_loaded = True
-    logger.info(f"✅ Загружено групп: {len(all_groups_cache)}")
+    try:
+        # Сначала получаем список факультетов
+        html = await fetch_html(SCHEDULE_URL)
+        if not html:
+            logger.error("❌ Не удалось загрузить главную страницу")
+            groups_loaded = True
+            return
+        
+        soup = BeautifulSoup(html, 'html.parser')
+        faculty_select = soup.find('select', {'name': 'faculty'})
+        if not faculty_select:
+            logger.error("❌ Не найден выбор факультета")
+            groups_loaded = True
+            return
+        
+        faculties = {}
+        for option in faculty_select.find_all('option'):
+            faculty_id = option.get('value')
+            faculty_name = option.text.strip()
+            if faculty_id and faculty_id != '0':
+                faculties[faculty_id] = faculty_name
+        
+        logger.info(f"📚 Найдено факультетов: {len(faculties)}")
+        
+        # Загружаем группы для каждого факультета ПОСЛЕДОВАТЕЛЬНО с задержкой
+        for faculty_id, faculty_name in faculties.items():
+            await load_groups_for_faculty(faculty_id, faculty_name)
+            await asyncio.sleep(1)  # Задержка между запросами
+        
+        groups_loaded = True
+        logger.info(f"✅ Все группы загружены в кеш (всего {len(all_groups_cache)} групп)")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки групп: {e}")
+        groups_loaded = True
 
 async def parse_daily_schedule(faculty_id: str, group_id: str, target_date: date, use_cache: bool = True) -> List[Dict]:
     """Парсинг расписания на конкретную дату с сохранением нумерации пар"""
@@ -1314,9 +1330,13 @@ async def process_group_input(message: types.Message, state: FSMContext):
     
     group_input = message.text.strip().upper()
     
+    # Проверяем, загружены ли группы
     if not all_groups_cache:
-        await message.answer(f"{emoji('search')} Загружаю список групп, подожди секунду...", parse_mode="HTML")
-        await load_all_groups()
+        await message.answer(
+            f"{emoji('search')} Группы ещё загружаются, подожди несколько секунд и попробуй ещё раз...",
+            parse_mode="HTML"
+        )
+        return
     
     if group_input in all_groups_cache:
         group_info = all_groups_cache[group_input]
@@ -1410,23 +1430,15 @@ async def run_health_server():
     await site.start()
     logger.info(f"✅ Health check сервер запущен на порту 8080")
 
-async def load_groups_background():
-    """Загрузка групп в фоне"""
-    global all_groups_cache, groups_loaded
-    try:
-        await load_all_groups()
-        groups_loaded = True
-        logger.info(f"✅ Все группы загружены в кеш ({len(all_groups_cache)} групп)")
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки групп: {e}")
-
 # ==================== ЗАПУСК ====================
 async def on_startup():
     global http_session
     http_session = aiohttp.ClientSession()
     await init_db()
-    asyncio.create_task(load_groups_background())
+    # Запускаем загрузку групп в фоне
+    asyncio.create_task(load_all_groups_background())
     logger.info("✅ HTTP сессия создана")
+    logger.info("✅ Загрузка групп запущена в фоне")
 
 async def on_shutdown():
     global http_session
